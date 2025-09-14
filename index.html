@@ -25,17 +25,35 @@ header h1{margin:0;font-size:18px;font-weight:600}
 .btn:hover{border-color:var(--accent)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#06142a}
 .btn.danger{border-color:var(--bad);color:var(--bad)}
+.btn.warn{border-color:var(--warn);color:var(--warn)}
 .kv{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .tag{border:1px solid var(--line);padding:4px 8px;border-radius:999px;font-size:12px}
 .tag.ok{border-color:var(--ok);color:var(--ok)}
 .tag.bad{border-color:var(--bad);color:var(--bad)}
 small.muted{color:var(--muted)}
 
-/* Tasks list */
-.task{display:grid;grid-template-columns:1fr 96px 90px 96px;gap:8px;align-items:center;border-bottom:1px dashed var(--line);padding:8px 0}
+/* Tasks list (added minutes chip + alarm button area) */
+.task{
+  display:grid;
+  grid-template-columns:1fr 96px 110px 74px 160px; /* name | hh:mm:ss | mins chip | % | buttons */
+  gap:8px;align-items:center;border-bottom:1px dashed var(--line);padding:8px 0
+}
 .task .name{font-weight:600}
 .task .time{font-variant-numeric:tabular-nums;text-align:center}
-.task .start{justify-self:end}
+.task .start{justify-self:end;display:flex;gap:8px}
+.chip{
+  font-variant-numeric:tabular-nums;text-align:center;border:1px solid var(--line);
+  border-radius:10px;padding:6px 8px;min-width:100px;background:#0d1122
+}
+.pct{min-width:64px}
+
+/* Ringing visuals */
+.ringing{animation:pulse 1s infinite}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(255,209,102,.28)}
+  70%{box-shadow:0 0 0 10px rgba(255,209,102,0)}
+  100%{box-shadow:0 0 0 0 rgba(255,209,102,0)}
+}
 
 /* Config */
 details.cfg{margin-top:10px}
@@ -100,7 +118,7 @@ textarea{min-height:70px;resize:vertical}
         <button class="btn" id="nextDay">▶</button>
       </div>
     </div>
-    <small class="muted">Start/Stop a task. Alarms ring when a task reaches its target minutes. “Silence” stops ringing.</small>
+    <small class="muted">Start/Stop a task. When a task reaches its target minutes, it <b>rings</b> until you press <b>🔔 Stop</b> or <b>Stop Alarm</b>.</small>
 
     <div id="tasks"></div>
 
@@ -191,7 +209,7 @@ textarea{min-height:70px;resize:vertical}
 <script>
 /* ========= Keys & Defaults ========= */
 const LSK = "weekend_coins_store_v2";         // config + days
-const TSK = "weekend_coins_timers_v1";        // per-day timers for alarms
+const TSK = "weekend_coins_timers_v2";        // per-day timers for alarms
 const ALARM_REPEAT_MS = 5000;
 
 const defaultState = () => ({
@@ -211,12 +229,11 @@ const defaultState = () => ({
 let S = load();        // main store
 let T = loadTimers();  // timers/alarms store
 
-/* ========= Audio (same pattern as your app) ========= */
+/* ========= Audio ========= */
 let audioCtx=null, audioPrimed=false;
 function initAudio(){ if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
 function primeAudioOnce(){ if(audioPrimed) return; audioPrimed=true; try{ initAudio(); audioCtx.resume(); const o=audioCtx.createOscillator(), g=audioCtx.createGain(); g.gain.value=0.0001; o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime+0.03);}catch(e){} }
 ['pointerdown','keydown','touchstart'].forEach(ev=>window.addEventListener(ev,primeAudioOnce,{once:true,capture:true}));
-
 function chime(){
   if(!S.sound) return;
   try{ initAudio(); audioCtx.resume(); }catch(e){}
@@ -261,7 +278,7 @@ function selectDate(dStr){
 }
 function shiftDay(delta){ const d=fromYMD(currentDate); d.setDate(d.getDate()+delta); selectDate(ymd(d)); }
 
-/* ========= Timers + Alarms (copied design) ========= */
+/* ========= Timers + Alarms ========= */
 const ALARMS={}; // { dayKey: { taskId: intervalId } }
 let ticker=null;
 
@@ -387,7 +404,7 @@ document.getElementById("soundToggle").checked = !!S.sound;
 document.getElementById("soundToggle").onchange = (e)=>{ S.sound=!!e.target.checked; save(); if(S.sound){ primeAudioOnce(); chime(); } };
 document.getElementById("testBeep").onclick = ()=>{ S.sound=true; document.getElementById("soundToggle").checked=true; primeAudioOnce(); chime(); };
 
-/* Export/Import (simple) */
+/* Export/Import */
 document.getElementById("exportBtn").onclick = ()=>{
   const blob = new Blob([JSON.stringify({S,T},null,2)], {type:"application/json"});
   const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="weekend-coins-backup.json"; a.click(); URL.revokeObjectURL(a.href);
@@ -408,49 +425,84 @@ function renderTasks(){
     const st=timers[t.id];
     const running=!!st.running;
     const elapsed = running ? st.sec + Math.floor((Date.now()-st.start)/1000) : st.sec;
-    const row=document.createElement("div"); row.className="task";
+    const minsDone = Math.max(0, Math.floor(elapsed/60));
+    const pct = Math.min(100, Math.round(elapsed/(Math.max(t.target,1)*60)*100));
+
+    const row=document.createElement("div"); row.className="task"; row.id=`row-${t.id}`;
+    if(st.ringing) row.classList.add("ringing");
 
     const nm=document.createElement("div"); nm.className="name";
     nm.innerHTML = `${t.name} <small class="muted">(${(t.weight||1)}w • target ${t.target}m)</small>`;
 
     const elc=document.createElement("div"); elc.className="time"; elc.id=`time-${t.id}`; elc.textContent=fmtSecs(elapsed);
 
-    const prog=document.createElement("div"); prog.className="time";
-    const pct = Math.min(100, Math.round(elapsed/(t.target*60)*100));
+    const minChip=document.createElement("div"); minChip.className="chip"; minChip.id=`mins-${t.id}`;
+    minChip.textContent = t.target ? `${minsDone} / ${t.target} m` : `${minsDone} m`;
+
+    const prog=document.createElement("div"); prog.className="time pct"; prog.id=`pct-${t.id}`;
     prog.innerHTML = `<small class="muted">${pct}%</small>`;
 
     const act=document.createElement("div"); act.className="start";
-    const b=document.createElement("button"); b.className="btn"; b.id=`btn-${t.id}`;
-    if(st.ringing){ b.textContent="🔔 Stop"; b.style.borderColor="#ffd166"; }
-    else if(running){ b.textContent="Stop"; b.style.borderColor="#7bd88f"; }
-    else { b.textContent="Start"; b.style.borderColor="var(--line)"; }
-    b.onclick = ()=>{
-      primeAudioOnce();
-      const st=getDayTimers(currentDate)[t.id];
-      if(st.ringing){ stopAlarm(currentDate,t.id,true); return; }
-      if(st.running) stopTimer(currentDate,t.id);
-      else startTimer(currentDate,t.id);
-    };
-    act.appendChild(b);
+    const startBtn=document.createElement("button"); startBtn.className="btn"; startBtn.id=`btn-${t.id}`;
+    if(st.ringing){ startBtn.textContent="🔔 Stop"; startBtn.classList.add("warn"); }
+    else if(running){ startBtn.textContent="Stop"; startBtn.style.borderColor="#7bd88f"; }
+    else { startBtn.textContent="Start"; startBtn.style.borderColor="var(--line)"; }
 
-    row.append(nm, elc, prog, act);
+    startBtn.onclick = ()=>{
+      primeAudioOnce();
+      const s=getDayTimers(currentDate)[t.id];
+      if(s.ringing){ stopAlarm(currentDate,t.id,true); return; }
+      if(s.running) stopTimer(currentDate,t.id); else startTimer(currentDate,t.id);
+    };
+
+    const alarmBtn=document.createElement("button"); alarmBtn.className="btn warn"; alarmBtn.id=`alarm-${t.id}`;
+    alarmBtn.textContent="Stop Alarm";
+    alarmBtn.style.display = st.ringing ? "inline-flex" : "none";
+    alarmBtn.onclick = ()=> stopAlarm(currentDate,t.id,true);
+
+    act.append(startBtn, alarmBtn);
+
+    row.append(nm, elc, minChip, prog, act);
     tasksEl.appendChild(row);
   });
 }
+
 function updateTimerUI(){
   const timers=T.days[currentDate]||{};
   for(const t of S.tasks){
+    const row=document.getElementById(`row-${t.id}`);
     const el=document.getElementById(`time-${t.id}`);
+    const chip=document.getElementById(`mins-${t.id}`);
+    const pctEl=document.getElementById(`pct-${t.id}`);
     const btn=document.getElementById(`btn-${t.id}`);
-    if(!el||!btn) continue;
+    const alarmBtn=document.getElementById(`alarm-${t.id}`);
+    if(!el||!btn||!chip||!pctEl) continue;
+
     const st=timers[t.id]||{sec:0,running:false,start:null,ringing:false};
     const sec = st.running ? st.sec + Math.floor((Date.now()-st.start)/1000) : st.sec;
+    const mins = Math.max(0, Math.floor(sec/60));
+    const pct = Math.min(100, Math.round(sec/(Math.max(t.target,1)*60)*100));
+
     el.textContent = fmtSecs(sec);
-    if(st.ringing){ btn.textContent="🔔 Stop"; btn.style.borderColor="#ffd166"; }
-    else if(st.running){ btn.textContent="Stop"; btn.style.borderColor="#7bd88f"; }
-    else { btn.textContent="Start"; btn.style.borderColor="var(--line)"; }
+    chip.textContent = t.target ? `${mins} / ${t.target} m` : `${mins} m`;
+    pctEl.innerHTML = `<small class="muted">${pct}%</small>`;
+
+    if(st.ringing){
+      btn.textContent="🔔 Stop"; btn.classList.add("warn");
+      alarmBtn && (alarmBtn.style.display="inline-flex");
+      row?.classList.add("ringing");
+    }else if(st.running){
+      btn.textContent="Stop"; btn.classList.remove("warn"); btn.style.borderColor="#7bd88f";
+      alarmBtn && (alarmBtn.style.display="none");
+      row?.classList.remove("ringing");
+    }else{
+      btn.textContent="Start"; btn.classList.remove("warn"); btn.style.borderColor="var(--line)";
+      alarmBtn && (alarmBtn.style.display="none");
+      row?.classList.remove("ringing");
+    }
   }
 }
+
 function updateDayKpis(){
   const p=computeEfficiencyFromTimers(currentDate);
   effEl.textContent=p.toFixed(2)+"%";
@@ -467,7 +519,7 @@ function saveCurrentDay(){
   save(); renderCalendar(); updateDayKpis(); chime();
 }
 
-/* ========= Weekend calendar (unchanged look) ========= */
+/* ========= Weekend calendar ========= */
 let viewMonth = (()=>{ const d=new Date(); return {y:d.getFullYear(), m:d.getMonth()}; })();
 document.getElementById("prevMonth").onclick = ()=>shiftMonth(-1);
 document.getElementById("nextMonth").onclick = ()=>shiftMonth(1);
@@ -583,7 +635,7 @@ function renderConfig(){
     const w=document.createElement("input"); w.type="number"; w.min=1; w.step=1; w.value=t.weight||1; w.onchange=()=>{ t.weight=+w.value||1; save(); updateDayKpis(); };
     const tg=document.createElement("input"); tg.type="number"; tg.min=1; tg.step=1; tg.value=t.target||30; tg.onchange=()=>{ t.target=+tg.value||30; save(); checkAlarms(currentDate); renderTasks(); };
     const del=document.createElement("button"); del.className="btn danger"; del.textContent="✕";
-    del.onclick=()=>{ if(!confirm("Delete task?")) return; const tid=t.id; S.tasks.splice(idx,1); // clean timers for this task
+    del.onclick=()=>{ if(!confirm("Delete task?")) return; const tid=t.id; S.tasks.splice(idx,1);
       for(const dk in T.days){ delete T.days[dk][tid]; } save(); saveTimers(); renderConfig(); renderTasks(); renderCalendar(); };
     row.append(n,w,tg,del); cfgList.appendChild(row);
   });
