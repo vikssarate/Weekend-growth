@@ -620,16 +620,32 @@ function shiftMonth(delta){
   if(viewMonth.m>11){ viewMonth.m=0; viewMonth.y++; }
   renderCalendar();
 }
+
+/* ---- FIXED weekend pairing ----
+   Start from the Saturday ON or BEFORE the 1st of the month,
+   then emit {sat,sun,satIn,sunIn} pairs weekly.
+*/
 function weekendPairs(year, monthIdx){
-  const lastDay = new Date(year, monthIdx+1, 0).getDate();
-  const days=[];
-  for(let d=1; d<=lastDay; d++){
-    const dt=new Date(year, monthIdx, d);
-    if(dt.getDay()===6){ const sun=(d+1<=lastDay)?new Date(year,monthIdx,d+1):null; days.push({sat:dt,sun}); }
+  const first = new Date(year, monthIdx, 1);
+  const last  = new Date(year, monthIdx + 1, 0);
+  // JS: Sun=0...Sat=6  → days back to Saturday
+  const start = new Date(first);
+  const backToSat = (first.getDay() + 1) % 7; // 0 if Sat, 1 if Sun, ...
+  start.setDate(first.getDate() - backToSat);
+
+  const pairs=[];
+  for (let d = new Date(start); d <= last || (new Date(d.getFullYear(), d.getMonth(), d.getDate()+1) <= last); d.setDate(d.getDate()+7)){
+    const sat = new Date(d);
+    const sun = new Date(d); sun.setDate(sun.getDate()+1);
+    pairs.push({
+      sat, sun,
+      satIn: sat.getMonth() === monthIdx,
+      sunIn: sun.getMonth() === monthIdx
+    });
   }
-  while(days.length<5) days.push({sat:null,sun:null});
-  return days;
+  return pairs; // dynamic 4–6 rows depending on month layout
 }
+
 function renderCalendar(){
   const title=new Date(viewMonth.y,viewMonth.m,1).toLocaleString(undefined,{month:"long",year:"numeric"});
   document.getElementById("monthTitle").textContent=title;
@@ -639,24 +655,34 @@ function renderCalendar(){
   let cnt={bronze:0,silver:0,gold:0};
 
   weekends.forEach(pair=>{
-    [pair.sat,pair.sun].forEach(d=>{
+    [ {d:pair.sat,inMonth:pair.satIn}, {d:pair.sun,inMonth:pair.sunIn} ].forEach(cellInfo=>{
       const cell=document.createElement("div"); cell.className="day";
-      if(!d){ cell.classList.add("inactive"); cell.innerHTML="<div class='center' style='height:100%'><small class='muted'>–</small></div>"; grid.appendChild(cell); return; }
-      const dateStr=ymd(d);
+      if(!cellInfo.d){ cell.classList.add("inactive"); cell.innerHTML="<div class='center' style='height:100%'><small class='muted'>–</small></div>"; grid.appendChild(cell); return; }
+
+      const dateStr=ymd(cellInfo.d);
       const rec=S.days[dateStr];
       const coin=rec? (rec.coin||"none") : "none";
-      if(coin!=="none") cnt[coin]++;
+
+      // Count only coins INSIDE current month
+      if(cellInfo.inMonth && coin!=="none") cnt[coin]++;
 
       const top=document.createElement("div"); top.className="dtop";
-      const num=document.createElement("div"); num.className="num"; num.textContent=d.getDate();
+      const num=document.createElement("div"); num.className="num"; num.textContent=cellInfo.d.getDate();
       const c=document.createElement("div"); c.className="coin"; c.textContent=COIN_EMO[coin];
       top.append(num,c);
 
       const note=document.createElement("small"); note.className="muted";
       note.textContent = rec && rec.note ? (rec.note.slice(0,40)) : "";
 
+      if(!cellInfo.inMonth){ cell.classList.add("inactive"); }
+
       cell.append(top,note);
-      cell.onclick=()=> selectDate(dateStr);
+
+      // Click only if inside current month
+      if(cellInfo.inMonth){
+        cell.onclick=()=> selectDate(dateStr);
+      }
+
       grid.appendChild(cell);
     });
   });
@@ -667,6 +693,7 @@ function renderCalendar(){
 
   updateMonthStats(viewMonth.y, viewMonth.m);
 }
+
 function updateMonthStats(y,m){
   const last=new Date(y,m+1,0).getDate();
   const pts=[], stamps=[];
