@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>Weekend Coins — Daily Timers + Weekend-Only Calendar</title>
+<title>Weekend Coins — Daily Timers + Alarm</title>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <style>
 :root{
@@ -12,11 +12,7 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%}
-body{
-  margin:0;background:var(--bg);color:var(--ink);
-  font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial;
-  -webkit-tap-highlight-color:transparent
-}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial;-webkit-tap-highlight-color:transparent}
 header,footer{padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 header h1{margin:0;font-size:18px;font-weight:600}
 .wrap{max-width:1200px;margin:0 auto;padding:12px}
@@ -24,11 +20,8 @@ header h1{margin:0;font-size:18px;font-weight:600}
 .panel{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 0 0 1px var(--line)}
 .panel h2{margin:.2rem 0 8px;font-size:16px}
 .sub{color:var(--muted);font-size:12px}
-.row{display:flex;align-items:center;gap:10px}
-.btn{
-  background:transparent;border:1px solid var(--line);color:var(--ink);
-  padding:6px 10px;border-radius:10px;cursor:pointer
-}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.btn{background:transparent;border:1px solid var(--line);color:var(--ink);padding:6px 10px;border-radius:10px;cursor:pointer}
 .btn:hover{border-color:var(--accent)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#06142a}
 .btn.danger{border-color:var(--bad);color:var(--bad)}
@@ -107,12 +100,13 @@ textarea{min-height:70px;resize:vertical}
         <button class="btn" id="nextDay">▶</button>
       </div>
     </div>
-    <small class="muted">Set each task’s Target in ⚙️ Configure. Starting a task auto-stops the previous one.</small>
+    <small class="muted">Start/Stop a task. Alarms ring when a task reaches its target minutes. “Silence” stops ringing.</small>
 
     <div id="tasks"></div>
 
     <div class="row" style="gap:8px;margin:10px 0 6px">
       <button class="btn" id="stopAll">Stop All</button>
+      <button class="btn" id="silenceAll">Silence</button>
       <button class="btn" id="clearDay">Clear</button>
     </div>
 
@@ -190,13 +184,15 @@ textarea{min-height:70px;resize:vertical}
 </div>
 
 <footer class="wrap" style="justify-content:space-between">
-  <small class="muted">Weekend-only calendar • data is saved in your browser (localStorage)</small>
-  <small class="muted">Made for iPad Safari: tap targets, tabular timers, offline-friendly</small>
+  <small class="muted">Weekend-only calendar • localStorage • alarm like your full app</small>
+  <small class="muted">iPad-friendly</small>
 </footer>
 
 <script>
-/* ------------------------- Storage & Defaults ------------------------- */
-const LSK = "weekend_coins_store_v1";
+/* ========= Keys & Defaults ========= */
+const LSK = "weekend_coins_store_v2";         // config + days
+const TSK = "weekend_coins_timers_v1";        // per-day timers for alarms
+const ALARM_REPEAT_MS = 5000;
 
 const defaultState = () => ({
   sound:true,
@@ -204,407 +200,408 @@ const defaultState = () => ({
   tasks:[
     {id:rid(), name:"Memorisation", weight:3, target:180},
     {id:rid(), name:"Math Practice", weight:2, target:60},
-    {id:rid(), name:"Throughout-day Reinforcing", weight:1, target:20},
+    {id:rid(), name:"Reinforcing (day)", weight:1, target:20},
     {id:rid(), name:"Night Recall", weight:1, target:20},
     {id:rid(), name:"Sleep", weight:1, target:240},
     {id:rid(), name:"Study (misc)", weight:1, target:1},
   ],
-  days:{} // "YYYY-MM-DD": { note, elapsed:{taskId:seconds}, eff:0..100, coin:'none'|'bronze'|'silver'|'gold' }
+  days:{} // "YYYY-MM-DD": { note, elapsed:{taskId:sec}, eff, coin }
 });
 
-let S = load();
+let S = load();        // main store
+let T = loadTimers();  // timers/alarms store
 
-function load(){
-  try{
-    const raw = localStorage.getItem(LSK);
-    if(!raw) return defaultState();
-    const obj = JSON.parse(raw);
-    // basic migrations
-    if(!obj.thresholds) obj.thresholds = { bronze:40, silver:70, gold:90 };
-    if(!obj.tasks) obj.tasks = defaultState().tasks;
-    if(!obj.days) obj.days = {};
-    if(typeof obj.sound!=="boolean") obj.sound = true;
-    return obj;
-  }catch(e){ return defaultState(); }
+/* ========= Audio (same pattern as your app) ========= */
+let audioCtx=null, audioPrimed=false;
+function initAudio(){ if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
+function primeAudioOnce(){ if(audioPrimed) return; audioPrimed=true; try{ initAudio(); audioCtx.resume(); const o=audioCtx.createOscillator(), g=audioCtx.createGain(); g.gain.value=0.0001; o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime+0.03);}catch(e){} }
+['pointerdown','keydown','touchstart'].forEach(ev=>window.addEventListener(ev,primeAudioOnce,{once:true,capture:true}));
+
+function chime(){
+  if(!S.sound) return;
+  try{ initAudio(); audioCtx.resume(); }catch(e){}
+  const ctx=audioCtx, now=ctx.currentTime;
+  [880,1175,1760].forEach((f,i)=>{
+    const o=ctx.createOscillator(), g=ctx.createGain();
+    o.type='sine'; o.frequency.value=f; o.connect(g); g.connect(ctx.destination);
+    const t=now+i*0.15;
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.linearRampToValueAtTime(0.2,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.25);
+    o.start(t); o.stop(t+0.27);
+  });
+  if(navigator.vibrate) navigator.vibrate(250);
 }
-function save(){ localStorage.setItem(LSK, JSON.stringify(S)); }
 
-/* ------------------------- Helpers ------------------------- */
+/* ========= Helpers ========= */
 function rid(){ return Math.random().toString(36).slice(2,9) }
 function f2(n){ return String(n).padStart(2,"0") }
 function ymd(d){ return d.toISOString().slice(0,10) }
-function fromYMD(s){
-  const [y,m,dd] = s.split("-").map(Number);
-  return new Date(y, m-1, dd);
-}
-function minutes(secs){ return Math.floor(secs/60) }
-function fmtSecs(secs){
-  const h = Math.floor(secs/3600);
-  const m = Math.floor((secs%3600)/60);
-  const s = Math.floor(secs%60);
-  return (h? (h+":"+f2(m)): (m))+":"+f2(s);
-}
-function beep(){
-  if(!S.sound) return;
-  try{
-    const ctx = new (window.AudioContext||window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain(); g.gain.value = .06;
-    o.connect(g).connect(ctx.destination);
-    o.frequency.value = 880; o.start();
-    setTimeout(()=>{o.stop();ctx.close()},140);
-  }catch(e){}
-}
-function coinFromEff(p){
-  const t=S.thresholds;
-  if(p>=t.gold) return "gold";
-  if(p>=t.silver) return "silver";
-  if(p>=t.bronze) return "bronze";
-  return "none";
-}
-const COIN_EMO = { none:"–", bronze:"🥉", silver:"🥈", gold:"🥇" };
+function fromYMD(s){ const [y,m,dd]=s.split("-").map(Number); return new Date(y,m-1,dd); }
+function fmtSecs(secs){ const h=Math.floor(secs/3600), m=Math.floor((secs%3600)/60), s=Math.floor(secs%60); return (h? (h+":"+f2(m)): (m))+":"+f2(s); }
+const COIN_EMO = { none:"·", bronze:"🥉", silver:"🥈", gold:"🥇" };
 const COIN_PTS = { none:0, bronze:1, silver:2, gold:3 };
+function coinFromEff(p){ const t=S.thresholds; if(p>=t.gold) return "gold"; if(p>=t.silver) return "silver"; if(p>=t.bronze) return "bronze"; return "none"; }
+function save(){ localStorage.setItem(LSK, JSON.stringify(S)); }
+function load(){
+  try{ const raw=localStorage.getItem(LSK); if(!raw) return defaultState(); const obj=JSON.parse(raw); obj.thresholds??={bronze:40,silver:70,gold:90}; obj.tasks??=defaultState().tasks; obj.days??={}; obj.sound=!!obj.sound; return obj; }catch(e){ return defaultState(); }
+}
+function loadTimers(){ try{ const r=localStorage.getItem(TSK); return r? JSON.parse(r) : {days:{}}; }catch(e){ return {days:{}}; } }
+function saveTimers(){ localStorage.setItem(TSK, JSON.stringify(T)); }
 
-/* ------------------------- Day Runtime ------------------------- */
+/* ========= Day selection ========= */
 let currentDate = ymd(new Date());
-let runtime = { timers:{}, ticker:null, active:null, scratchElapsed:{} };
-// scratchElapsed holds unsaved elapsed seconds for visible day
+const dayPretty = document.getElementById("dayPretty");
+function selectDate(dStr){
+  silenceAllAcrossDays();
+  currentDate=dStr;
+  dayPretty.textContent=fromYMD(currentDate).toLocaleDateString(undefined,{weekday:"short", day:"2-digit", month:"short", year:"numeric"});
+  ensureTimersFromSaved(currentDate);
+  renderTasks(); updateDayKpis(); ensureTick(); checkAlarms(currentDate);
+}
+function shiftDay(delta){ const d=fromYMD(currentDate); d.setDate(d.getDate()+delta); selectDate(ymd(d)); }
 
-function ensureScratch(){
-  runtime.scratchElapsed = {};
-  S.tasks.forEach(t=>{
-    runtime.scratchElapsed[t.id]=0;
-  });
-  const saved = S.days[currentDate];
-  if(saved && saved.elapsed){
-    for(const k of Object.keys(saved.elapsed)){
-      runtime.scratchElapsed[k]=saved.elapsed[k]||0;
-    }
-    if(saved.note) note.value = saved.note;
-  }else{
-    note.value="";
+/* ========= Timers + Alarms (copied design) ========= */
+const ALARMS={}; // { dayKey: { taskId: intervalId } }
+let ticker=null;
+
+function getDayTimers(dayKey){
+  if(!T.days[dayKey]) T.days[dayKey]={};
+  for(const t of S.tasks){
+    if(!T.days[dayKey][t.id]) T.days[dayKey][t.id]={sec:0,running:false,start:null,fired:false,ringing:false};
+  }
+  return T.days[dayKey];
+}
+function ensureTimersFromSaved(dayKey){
+  const saved=S.days[dayKey];
+  if(!saved||!saved.elapsed) { getDayTimers(dayKey); return; }
+  const timers=getDayTimers(dayKey);
+  for(const t of S.tasks){
+    if(timers[t.id].sec===0 && saved.elapsed[t.id]) timers[t.id].sec = saved.elapsed[t.id];
+  }
+  saveTimers();
+}
+
+function startTimer(dayKey, taskId){
+  const timers=getDayTimers(dayKey);
+  // auto-stop others
+  for(const [id,st] of Object.entries(timers)){
+    if(st.running){ st.sec += Math.floor((Date.now()-st.start)/1000); st.running=false; st.start=null; }
+  }
+  const st=timers[taskId];
+  if(!st.running){ st.running=true; st.start=Date.now(); }
+  saveTimers(); ensureTick(); updateTimerUI(); checkAlarms(dayKey); updateDayKpis();
+}
+function stopTimer(dayKey, taskId){
+  const st=getDayTimers(dayKey)[taskId];
+  if(st && st.running){
+    st.sec += Math.floor((Date.now()-st.start)/1000);
+    st.running=false; st.start=null;
+    saveTimers(); updateTimerUI(); checkAlarms(dayKey); updateDayKpis();
+  }
+}
+function stopAll(dayKey){
+  const timers=getDayTimers(dayKey); let ch=false;
+  for(const st of Object.values(timers)){
+    if(st.running){ st.sec += Math.floor((Date.now()-st.start)/1000); st.running=false; st.start=null; ch=true; }
+  }
+  if(ch){ saveTimers(); updateTimerUI(); checkAlarms(dayKey); updateDayKpis(); }
+}
+function startAlarm(dayKey, taskId){
+  const st=getDayTimers(dayKey)[taskId]; if(st.ringing) return;
+  st.fired=true; st.ringing=true; saveTimers(); chime();
+  if(!ALARMS[dayKey]) ALARMS[dayKey]={};
+  ALARMS[dayKey][taskId]=setInterval(()=>chime(), ALARM_REPEAT_MS);
+  updateTimerUI();
+}
+function stopAlarm(dayKey, taskId, keepAck=true){
+  const st=getDayTimers(dayKey)[taskId]; if(!st) return;
+  st.ringing=false; if(!keepAck) st.fired=false; saveTimers();
+  if(ALARMS[dayKey]?.[taskId]){ clearInterval(ALARMS[dayKey][taskId]); delete ALARMS[dayKey][taskId]; }
+  updateTimerUI();
+}
+function silenceAll(dayKey){ for(const t of S.tasks) stopAlarm(dayKey,t.id,true); }
+function silenceAllAcrossDays(){ for(const dk in ALARMS){ for(const id in ALARMS[dk]) clearInterval(ALARMS[dk][id]); delete ALARMS[dk]; } for(const m of Object.values(T.days)){ for(const st of Object.values(m)) { st.ringing=false; st.fired=true; } } saveTimers(); updateTimerUI(); }
+
+function ensureTick(){
+  if(ticker) return;
+  ticker=setInterval(()=>{
+    const timers=T.days[currentDate]||{};
+    let any=false;
+    for(const st of Object.values(timers)){ if(st.running){ any=true; break; } }
+    if(!any) return;
+    updateTimerUI(true); checkAlarms(currentDate); updateDayKpis();
+  },1000);
+}
+function checkAlarms(dayKey){
+  const timers=getDayTimers(dayKey);
+  for(const t of S.tasks){
+    const st=timers[t.id];
+    const targetSec=(+t.target||0)*60;
+    const elapsed=st.running ? st.sec + Math.floor((Date.now()-st.start)/1000) : st.sec;
+    if(targetSec>0 && elapsed>=targetSec){ if(!st.fired) startAlarm(dayKey,t.id); }
+    else{ if(st.ringing) stopAlarm(dayKey,t.id,false); if(st.fired){ st.fired=false; saveTimers(); } }
   }
 }
 
-function startTimer(taskId){
-  stopAllTimers();
-  runtime.active = taskId;
-  runtime.timers[taskId] = { start: Date.now() };
-  if(!runtime.ticker){
-    runtime.ticker = setInterval(tick, 1000);
-  }
-  beep();
-  renderTasks();
-}
-function stopTimer(taskId){
-  const t = runtime.timers[taskId];
-  if(!t) return;
-  const delta = Math.floor((Date.now()-t.start)/1000);
-  runtime.scratchElapsed[taskId] = (runtime.scratchElapsed[taskId]||0)+delta;
-  delete runtime.timers[taskId];
-  if(Object.keys(runtime.timers).length===0){ clearInterval(runtime.ticker); runtime.ticker=null; runtime.active=null; }
-  beep();
-  renderTasks();
-}
-function stopAllTimers(){
-  for(const id of Object.keys(runtime.timers)) stopTimer(id);
-}
-function tick(){ renderTasks() }
-
-function computeEfficiency(){
-  const totalW = S.tasks.reduce((a,t)=>a+(t.weight||1),0) || 1;
+/* ========= Efficiency from timers ========= */
+function computeEfficiencyFromTimers(dayKey){
+  const timers=getDayTimers(dayKey);
+  const totalW = S.tasks.reduce((a,t)=>a+(t.weight||1),0)||1;
   let score=0;
   S.tasks.forEach(t=>{
-    const el = (runtime.scratchElapsed[t.id]||0);
-    const frac = Math.min(el/ (Math.max(t.target,1)*60), 1);
+    const st=timers[t.id];
+    const elapsed = st.running ? st.sec + Math.floor((Date.now()-st.start)/1000) : st.sec;
+    const frac = Math.min(elapsed / (Math.max(t.target,1)*60), 1);
     score += (t.weight||1)*frac;
   });
-  const pct = Math.round((score/totalW)*10000)/100; // 0.00
-  return Math.max(0, Math.min(100, pct));
+  const pct = Math.round((score/totalW)*10000)/100;
+  return Math.max(0,Math.min(100,pct));
 }
 
-/* ------------------------- DOM references ------------------------- */
-const tasksEl = document.getElementById("tasks");
-const effEl = document.getElementById("eff");
-const coinEl = document.getElementById("coin");
-const note = document.getElementById("note");
-const dayPretty = document.getElementById("dayPretty");
+/* ========= DOM refs ========= */
+const tasksEl=document.getElementById("tasks");
+const effEl=document.getElementById("eff");
+const coinEl=document.getElementById("coin");
+const note=document.getElementById("note");
 
-/* Buttons */
-document.getElementById("stopAll").onclick = ()=>stopAllTimers();
+document.getElementById("stopAll").onclick = ()=>stopAll(currentDate);
+document.getElementById("silenceAll").onclick = ()=>silenceAll(currentDate);
 document.getElementById("clearDay").onclick = ()=>{
-  stopAllTimers();
-  ensureScratch(); renderTasks(); updateDayKpis();
+  stopAll(currentDate); silenceAll(currentDate);
+  for(const t of S.tasks){ const st=getDayTimers(currentDate)[t.id]; st.sec=0; st.running=false; st.start=null; st.fired=false; st.ringing=false; }
+  saveTimers(); renderTasks(); updateDayKpis();
 };
 document.getElementById("saveDay").onclick = saveCurrentDay;
 document.getElementById("deleteDay").onclick = ()=>{
-  stopAllTimers();
-  delete S.days[currentDate]; save(); renderCalendar(); ensureScratch(); renderTasks(); updateDayKpis();
+  stopAll(currentDate); silenceAll(currentDate);
+  delete S.days[currentDate]; delete T.days[currentDate];
+  save(); saveTimers(); renderCalendar(); renderTasks(); updateDayKpis();
 };
 document.getElementById("todayBtn").onclick = ()=>selectDate(ymd(new Date()));
 document.getElementById("prevDay").onclick = ()=>shiftDay(-1);
 document.getElementById("nextDay").onclick = ()=>shiftDay(1);
 
-/* Sound & test */
+/* Sound controls */
 document.getElementById("soundToggle").checked = !!S.sound;
-document.getElementById("soundToggle").onchange = (e)=>{ S.sound=!!e.target.checked; save(); };
-document.getElementById("testBeep").onclick = ()=>beep();
+document.getElementById("soundToggle").onchange = (e)=>{ S.sound=!!e.target.checked; save(); if(S.sound){ primeAudioOnce(); chime(); } };
+document.getElementById("testBeep").onclick = ()=>{ S.sound=true; document.getElementById("soundToggle").checked=true; primeAudioOnce(); chime(); };
 
-/* Export/Import */
+/* Export/Import (simple) */
 document.getElementById("exportBtn").onclick = ()=>{
-  const blob = new Blob([JSON.stringify(S,null,2)], {type:"application/json"});
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "weekend-coins-backup.json";
-  a.click();
-  URL.revokeObjectURL(a.href);
+  const blob = new Blob([JSON.stringify({S,T},null,2)], {type:"application/json"});
+  const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="weekend-coins-backup.json"; a.click(); URL.revokeObjectURL(a.href);
 };
 document.getElementById("importJson").onchange = (e)=>{
-  const f = e.target.files[0]; if(!f) return;
-  const r = new FileReader();
-  r.onload = ()=>{
-    try{
-      const obj = JSON.parse(r.result);
-      S = Object.assign(defaultState(), obj);
-      save();
-      ensureScratch(); renderAll();
-    }catch(err){ alert("Invalid JSON"); }
-  };
+  const f=e.target.files?.[0]; if(!f) return; const r=new FileReader();
+  r.onload=()=>{ try{ const data=JSON.parse(r.result); if(data.S) S=data.S; if(data.T) T=data.T; save(); saveTimers(); selectDate(currentDate); renderAll(); alert("Imported."); }catch(err){ alert("Invalid JSON"); } };
   r.readAsText(f);
 };
 
-/* Config controls */
-const cfgList = document.getElementById("cfgList");
-document.getElementById("addTask").onclick = ()=>{
-  const name = document.getElementById("newName").value.trim();
-  const weight = +document.getElementById("newWeight").value||1;
-  const target = +document.getElementById("newTarget").value||30;
-  if(!name) return;
-  S.tasks.push({id:rid(), name, weight, target});
-  document.getElementById("newName").value="";
-  document.getElementById("newWeight").value="";
-  document.getElementById("newTarget").value="";
-  save(); renderConfig(); ensureScratch(); renderTasks(); updateDayKpis();
-};
-document.getElementById("saveCfg").onclick = ()=>{
-  S.thresholds.bronze = +document.getElementById("thBronze").value||40;
-  S.thresholds.silver = +document.getElementById("thSilver").value||70;
-  S.thresholds.gold   = +document.getElementById("thGold").value||90;
-  save(); renderCalendar(); updateDayKpis();
-};
-
-/* Calendar nav */
-let viewMonth = (()=>{ const d=new Date(); return {y:d.getFullYear(), m:d.getMonth()}; })();
-document.getElementById("prevMonth").onclick = ()=>shiftMonth(-1);
-document.getElementById("nextMonth").onclick = ()=>shiftMonth(1);
-
-/* ------------------------- Renderers ------------------------- */
+/* ========= Renderers ========= */
 function renderTasks(){
-  tasksEl.innerHTML = "";
-  S.tasks.forEach(t=>{
-    const running = !!runtime.timers[t.id];
-    const elapsed = (runtime.scratchElapsed[t.id]||0) + (running ? Math.floor((Date.now()-runtime.timers[t.id].start)/1000) : 0);
-    const row = document.createElement("div"); row.className="task";
+  tasksEl.innerHTML="";
+  const timers=getDayTimers(currentDate);
+  if(S.days[currentDate]?.note) note.value=S.days[currentDate].note; else note.value="";
 
-    const nm = document.createElement("div"); nm.className="name"; nm.innerHTML = `${t.name} <small class="muted">(${((t.weight||1))}w • target ${t.target}m)</small>`;
-    const elc = document.createElement("div"); elc.className="time"; elc.textContent = fmtSecs(elapsed);
-    const prog = document.createElement("div"); prog.className="time";
+  S.tasks.forEach(t=>{
+    const st=timers[t.id];
+    const running=!!st.running;
+    const elapsed = running ? st.sec + Math.floor((Date.now()-st.start)/1000) : st.sec;
+    const row=document.createElement("div"); row.className="task";
+
+    const nm=document.createElement("div"); nm.className="name";
+    nm.innerHTML = `${t.name} <small class="muted">(${(t.weight||1)}w • target ${t.target}m)</small>`;
+
+    const elc=document.createElement("div"); elc.className="time"; elc.id=`time-${t.id}`; elc.textContent=fmtSecs(elapsed);
+
+    const prog=document.createElement("div"); prog.className="time";
     const pct = Math.min(100, Math.round(elapsed/(t.target*60)*100));
     prog.innerHTML = `<small class="muted">${pct}%</small>`;
-    const act = document.createElement("div"); act.className="start";
-    const b = document.createElement("button");
-    b.className="btn";
-    b.textContent = running ? "Stop" : "Start";
-    b.onclick = ()=> running ? stopTimer(t.id) : startTimer(t.id);
+
+    const act=document.createElement("div"); act.className="start";
+    const b=document.createElement("button"); b.className="btn"; b.id=`btn-${t.id}`;
+    if(st.ringing){ b.textContent="🔔 Stop"; b.style.borderColor="#ffd166"; }
+    else if(running){ b.textContent="Stop"; b.style.borderColor="#7bd88f"; }
+    else { b.textContent="Start"; b.style.borderColor="var(--line)"; }
+    b.onclick = ()=>{
+      primeAudioOnce();
+      const st=getDayTimers(currentDate)[t.id];
+      if(st.ringing){ stopAlarm(currentDate,t.id,true); return; }
+      if(st.running) stopTimer(currentDate,t.id);
+      else startTimer(currentDate,t.id);
+    };
     act.appendChild(b);
 
     row.append(nm, elc, prog, act);
     tasksEl.appendChild(row);
   });
-  updateDayKpis();
 }
-
+function updateTimerUI(){
+  const timers=T.days[currentDate]||{};
+  for(const t of S.tasks){
+    const el=document.getElementById(`time-${t.id}`);
+    const btn=document.getElementById(`btn-${t.id}`);
+    if(!el||!btn) continue;
+    const st=timers[t.id]||{sec:0,running:false,start:null,ringing:false};
+    const sec = st.running ? st.sec + Math.floor((Date.now()-st.start)/1000) : st.sec;
+    el.textContent = fmtSecs(sec);
+    if(st.ringing){ btn.textContent="🔔 Stop"; btn.style.borderColor="#ffd166"; }
+    else if(st.running){ btn.textContent="Stop"; btn.style.borderColor="#7bd88f"; }
+    else { btn.textContent="Start"; btn.style.borderColor="var(--line)"; }
+  }
+}
 function updateDayKpis(){
-  const p = computeEfficiency();
-  effEl.textContent = p.toFixed(2)+"%";
-  const c = coinFromEff(p);
-  coinEl.textContent = COIN_EMO[c];
+  const p=computeEfficiencyFromTimers(currentDate);
+  effEl.textContent=p.toFixed(2)+"%";
+  coinEl.textContent=COIN_EMO[coinFromEff(p)];
 }
 
-function renderConfig(){
-  cfgList.innerHTML="";
-  S.tasks.forEach((t,idx)=>{
-    const row = document.createElement("div"); row.className="cfgrow";
-    const n = document.createElement("input"); n.type="text"; n.value=t.name; n.onchange=()=>{ t.name=n.value; save(); renderTasks(); renderCalendar(); };
-    const w = document.createElement("input"); w.type="number"; w.min=1; w.step=1; w.value=t.weight||1; w.onchange=()=>{ t.weight=+w.value||1; save(); renderTasks(); renderCalendar(); };
-    const tg = document.createElement("input"); tg.type="number"; tg.min=1; tg.step=1; tg.value=t.target||30; tg.onchange=()=>{ t.target=+tg.value||30; save(); renderTasks(); };
-    const del = document.createElement("button"); del.className="btn danger"; del.textContent="✕";
-    del.onclick=()=>{ if(!confirm("Delete task?")) return; S.tasks.splice(idx,1); save(); renderConfig(); ensureScratch(); renderTasks(); renderCalendar(); };
-    row.append(n,w,tg,del);
-    cfgList.appendChild(row);
-  });
-  document.getElementById("thBronze").value = S.thresholds.bronze;
-  document.getElementById("thSilver").value = S.thresholds.silver;
-  document.getElementById("thGold").value   = S.thresholds.gold;
-}
-
-function renderCalendar(){
-  const title = new Date(viewMonth.y, viewMonth.m, 1).toLocaleString(undefined,{month:"long", year:"numeric"});
-  document.getElementById("monthTitle").textContent = title;
-
-  const grid = document.getElementById("weekendGrid");
-  grid.innerHTML = "";
-
-  const weekends = weekendPairs(viewMonth.y, viewMonth.m); // array of {sat:Date|null, sun:Date|null}
-  let cnt = {bronze:0,silver:0,gold:0};
-  weekends.forEach(pair=>{
-    const cells = [pair.sat, pair.sun];
-    cells.forEach(d=>{
-      const cell = document.createElement("div"); cell.className="day";
-      if(!d){ cell.classList.add("inactive"); cell.innerHTML="<div class='center' style='height:100%'><small class='muted'>–</small></div>"; grid.appendChild(cell); return; }
-      const dateStr = ymd(d);
-      const rec = S.days[dateStr];
-      const coin = rec ? (rec.coin||"none") : "none";
-      if(coin!=="none") cnt[coin]++;
-
-      const top = document.createElement("div"); top.className="dtop";
-      const num = document.createElement("div"); num.className="num"; num.textContent = d.getDate();
-      const c = document.createElement("div"); c.className="coin"; c.textContent = COIN_EMO[coin];
-      top.append(num,c);
-
-      const note = document.createElement("small"); note.className="muted";
-      note.textContent = rec && rec.note ? (rec.note.slice(0,40)) : "";
-
-      cell.append(top, note);
-      cell.onclick = ()=> selectDate(dateStr);
-      grid.appendChild(cell);
-    });
-  });
-
-  // Counters
-  document.getElementById("cBronze").textContent = cnt.bronze;
-  document.getElementById("cSilver").textContent = cnt.silver;
-  document.getElementById("cGold").textContent   = cnt.gold;
-
-  // Stats
-  updateMonthStats(viewMonth.y, viewMonth.m);
-}
-
-function weekendPairs(year, monthIdx){
-  // Build rows with (Saturday, Sunday) for this month (may be null if outside month)
-  const first = new Date(year, monthIdx, 1);
-  const lastDay = new Date(year, monthIdx+1, 0).getDate();
-  const days = [];
-  for(let d=1; d<=lastDay; d++){
-    const dt = new Date(year, monthIdx, d);
-    if(dt.getDay()===6){ // Saturday
-      const sun = (d+1<=lastDay) ? new Date(year, monthIdx, d+1) : null;
-      days.push({sat:dt, sun});
-    }
-  }
-  // Ensure at least 5 rows for consistent grid height
-  while(days.length<5) days.push({sat:null, sun:null});
-  return days;
-}
-
-function updateMonthStats(y,m){
-  const last = new Date(y, m+1, 0).getDate();
-  const pts=[], stamps=[];
-  for(let d=1; d<=last; d++){
-    const dt = new Date(y, m, d);
-    if(dt.getDay()!==6 && dt.getDay()!==0) continue; // weekends only
-    const rec = S.days[ymd(dt)];
-    if(!rec) continue;
-    pts.push(COIN_PTS[rec.coin||"none"]);
-    stamps.push({d:dt, coin:rec.coin||"none"});
-  }
-  const avg = pts.length? (pts.reduce((a,b)=>a+b,0)/pts.length).toFixed(2):"0";
-  document.getElementById("avgPts").textContent = avg;
-
-  // Longest streak (silver or gold) across consecutive weekend days
-  stamps.sort((a,b)=>a.d-b.d);
-  let best=0, cur=0;
-  stamps.forEach((s,i)=>{
-    const ok = (s.coin==="silver"||s.coin==="gold");
-    if(!ok){ cur=0; return; }
-    if(i===0){ cur=1; best=Math.max(best,cur); return; }
-    const prev = stamps[i-1].d;
-    const diff = (s.d - prev)/(1000*60*60*24);
-    // treat Sat->Sun (1 day) or previous weekend to next Saturday (6 or 7 days depending on saved days) as consecutive weekend steps
-    if(diff===1 || diff>=6){ cur+=1; } else { cur=1; }
-    best=Math.max(best,cur);
-  });
-  document.getElementById("streak").textContent = best;
-
-  // Dominant coin for this month
-  const counts = {bronze:0,silver:0,gold:0};
-  stamps.forEach(s=>{ if(s.coin!=="none") counts[s.coin]++; });
-  const dom = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
-  document.getElementById("domMonth").textContent = dom && dom[1]>0 ? `${COIN_EMO[dom[0]]} by count` : "–";
-
-  // Dominant monthly coin for the year (aggregate per month)
-  const agg = {bronze:0,silver:0,gold:0};
-  for(let mm=0; mm<12; mm++){
-    const cnt = {bronze:0,silver:0,gold:0};
-    const last2 = new Date(y, mm+1, 0).getDate();
-    for(let d=1; d<=last2; d++){
-      const dt = new Date(y, mm, d);
-      if(dt.getDay()!==6 && dt.getDay()!==0) continue;
-      const rec = S.days[ymd(dt)];
-      if(rec && rec.coin!=="none") cnt[rec.coin]++;
-    }
-    const domM = Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0];
-    if(domM && domM[1]>0) agg[domM[0]]++;
-  }
-  const domY = Object.entries(agg).sort((a,b)=>b[1]-a[1])[0];
-  document.getElementById("domYear").textContent = domY && domY[1]>0 ? `${COIN_EMO[domY[0]]} by month` : "–";
-}
-
-/* ------------------------- Day selection & persistence ------------------------- */
-function selectDate(dStr){
-  stopAllTimers();
-  currentDate = dStr;
-  dayPretty.textContent = fromYMD(currentDate).toLocaleDateString(undefined,{weekday:"short", day:"2-digit", month:"short", year:"numeric"});
-  ensureScratch(); renderTasks(); updateDayKpis();
-}
-function shiftDay(delta){
-  const d = fromYMD(currentDate); d.setDate(d.getDate()+delta);
-  selectDate(ymd(d));
-}
 function saveCurrentDay(){
-  stopAllTimers();
-  const eff = computeEfficiency();
-  const coin = coinFromEff(eff);
-  S.days[currentDate] = {
-    note: note.value||"",
-    elapsed: {...runtime.scratchElapsed},
-    eff, coin
-  };
-  save();
-  renderCalendar(); updateDayKpis();
-  beep();
+  stopAll(currentDate);
+  const timers=getDayTimers(currentDate);
+  const elapsed={}; for(const t of S.tasks){ elapsed[t.id]=timers[t.id].sec; }
+  const eff=computeEfficiencyFromTimers(currentDate);
+  const coin=coinFromEff(eff);
+  S.days[currentDate]={ note:note.value||"", elapsed, eff, coin };
+  save(); renderCalendar(); updateDayKpis(); chime();
 }
 
-/* ------------------------- Month navigation ------------------------- */
+/* ========= Weekend calendar (unchanged look) ========= */
+let viewMonth = (()=>{ const d=new Date(); return {y:d.getFullYear(), m:d.getMonth()}; })();
+document.getElementById("prevMonth").onclick = ()=>shiftMonth(-1);
+document.getElementById("nextMonth").onclick = ()=>shiftMonth(1);
+
 function shiftMonth(delta){
   viewMonth.m += delta;
   if(viewMonth.m<0){ viewMonth.m=11; viewMonth.y--; }
   if(viewMonth.m>11){ viewMonth.m=0; viewMonth.y++; }
   renderCalendar();
 }
+function weekendPairs(year, monthIdx){
+  const lastDay = new Date(year, monthIdx+1, 0).getDate();
+  const days=[];
+  for(let d=1; d<=lastDay; d++){
+    const dt=new Date(year, monthIdx, d);
+    if(dt.getDay()===6){ const sun=(d+1<=lastDay)?new Date(year,monthIdx,d+1):null; days.push({sat:dt,sun}); }
+  }
+  while(days.length<5) days.push({sat:null,sun:null});
+  return days;
+}
+function renderCalendar(){
+  const title=new Date(viewMonth.y,viewMonth.m,1).toLocaleString(undefined,{month:"long",year:"numeric"});
+  document.getElementById("monthTitle").textContent=title;
 
-/* ------------------------- Bootstrap ------------------------- */
+  const grid=document.getElementById("weekendGrid"); grid.innerHTML="";
+  const weekends=weekendPairs(viewMonth.y,viewMonth.m);
+  let cnt={bronze:0,silver:0,gold:0};
+
+  weekends.forEach(pair=>{
+    [pair.sat,pair.sun].forEach(d=>{
+      const cell=document.createElement("div"); cell.className="day";
+      if(!d){ cell.classList.add("inactive"); cell.innerHTML="<div class='center' style='height:100%'><small class='muted'>–</small></div>"; grid.appendChild(cell); return; }
+      const dateStr=ymd(d);
+      const rec=S.days[dateStr];
+      const coin=rec? (rec.coin||"none") : "none";
+      if(coin!=="none") cnt[coin]++;
+
+      const top=document.createElement("div"); top.className="dtop";
+      const num=document.createElement("div"); num.className="num"; num.textContent=d.getDate();
+      const c=document.createElement("div"); c.className="coin"; c.textContent=COIN_EMO[coin];
+      top.append(num,c);
+
+      const note=document.createElement("small"); note.className="muted";
+      note.textContent = rec && rec.note ? (rec.note.slice(0,40)) : "";
+
+      cell.append(top,note);
+      cell.onclick=()=> selectDate(dateStr);
+      grid.appendChild(cell);
+    });
+  });
+
+  document.getElementById("cBronze").textContent=cnt.bronze;
+  document.getElementById("cSilver").textContent=cnt.silver;
+  document.getElementById("cGold").textContent=cnt.gold;
+
+  updateMonthStats(viewMonth.y, viewMonth.m);
+}
+function updateMonthStats(y,m){
+  const last=new Date(y,m+1,0).getDate();
+  const pts=[], stamps=[];
+  for(let d=1; d<=last; d++){
+    const dt=new Date(y,m,d);
+    if(dt.getDay()!==6 && dt.getDay()!==0) continue;
+    const rec=S.days[ymd(dt)];
+    if(!rec) continue;
+    pts.push(COIN_PTS[rec.coin||"none"]);
+    stamps.push({d:dt, coin:rec.coin||"none"});
+  }
+  const avg=pts.length? (pts.reduce((a,b)=>a+b,0)/pts.length).toFixed(2) : "0";
+  document.getElementById("avgPts").textContent=avg;
+
+  stamps.sort((a,b)=>a.d-b.d);
+  let best=0,cur=0;
+  stamps.forEach((s,i)=>{
+    const ok=(s.coin==="silver"||s.coin==="gold");
+    if(!ok){ cur=0; return; }
+    if(i===0){ cur=1; best=Math.max(best,cur); return; }
+    const diff=(s.d - stamps[i-1].d)/(1000*60*60*24);
+    if(diff===1 || diff>=6){ cur+=1; } else { cur=1; }
+    best=Math.max(best,cur);
+  });
+  document.getElementById("streak").textContent=best;
+
+  const counts={bronze:0,silver:0,gold:0};
+  stamps.forEach(s=>{ if(s.coin!=="none") counts[s.coin]++; });
+  const dom=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+  document.getElementById("domMonth").textContent = dom && dom[1]>0 ? `${COIN_EMO[dom[0]]} by count` : "–";
+
+  const agg={bronze:0,silver:0,gold:0};
+  for(let mm=0; mm<12; mm++){
+    const cnt={bronze:0,silver:0,gold:0};
+    const last2=new Date(y,mm+1,0).getDate();
+    for(let d=1; d<=last2; d++){
+      const dt=new Date(y,mm,d);
+      if(dt.getDay()!==6 && dt.getDay()!==0) continue;
+      const rec=S.days[ymd(dt)];
+      if(rec && rec.coin!=="none") cnt[rec.coin]++;
+    }
+    const dm=Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0];
+    if(dm && dm[1]>0) agg[dm[0]]++;
+  }
+  const dy=Object.entries(agg).sort((a,b)=>b[1]-a[1])[0];
+  document.getElementById("domYear").textContent = dy && dy[1]>0 ? `${COIN_EMO[dy[0]]} by month` : "–";
+}
+
+/* ========= Config UI ========= */
+const cfgList=document.getElementById("cfgList");
+function renderConfig(){
+  cfgList.innerHTML="";
+  S.tasks.forEach((t,idx)=>{
+    const row=document.createElement("div"); row.className="cfgrow";
+    const n=document.createElement("input"); n.type="text"; n.value=t.name; n.onchange=()=>{ t.name=n.value; save(); renderTasks(); renderCalendar(); };
+    const w=document.createElement("input"); w.type="number"; w.min=1; w.step=1; w.value=t.weight||1; w.onchange=()=>{ t.weight=+w.value||1; save(); updateDayKpis(); };
+    const tg=document.createElement("input"); tg.type="number"; tg.min=1; tg.step=1; tg.value=t.target||30; tg.onchange=()=>{ t.target=+tg.value||30; save(); checkAlarms(currentDate); renderTasks(); };
+    const del=document.createElement("button"); del.className="btn danger"; del.textContent="✕";
+    del.onclick=()=>{ if(!confirm("Delete task?")) return; const tid=t.id; S.tasks.splice(idx,1); // clean timers for this task
+      for(const dk in T.days){ delete T.days[dk][tid]; } save(); saveTimers(); renderConfig(); renderTasks(); renderCalendar(); };
+    row.append(n,w,tg,del); cfgList.appendChild(row);
+  });
+  document.getElementById("thBronze").value=S.thresholds.bronze;
+  document.getElementById("thSilver").value=S.thresholds.silver;
+  document.getElementById("thGold").value  =S.thresholds.gold;
+}
+document.getElementById("addTask").onclick=()=>{ const name=document.getElementById("newName").value.trim(); const weight=+document.getElementById("newWeight").value||1; const target=+document.getElementById("newTarget").value||30; if(!name) return; const id=rid(); S.tasks.push({id,name,weight,target}); document.getElementById("newName").value=""; document.getElementById("newWeight").value=""; document.getElementById("newTarget").value=""; save(); renderConfig(); ensureTimersFromSaved(currentDate); renderTasks(); checkAlarms(currentDate); };
+document.getElementById("saveCfg").onclick=()=>{ S.thresholds.bronze=+document.getElementById("thBronze").value||40; S.thresholds.silver=+document.getElementById("thSilver").value||70; S.thresholds.gold=+document.getElementById("thGold").value||90; save(); renderCalendar(); updateDayKpis(); };
+
+/* ========= Bootstrap ========= */
 function renderAll(){
   renderConfig();
-  document.getElementById("soundToggle").checked = !!S.sound;
   selectDate(currentDate);
-  // Set month view to current date's month
-  const d = fromYMD(currentDate);
-  viewMonth = { y:d.getFullYear(), m:d.getMonth() };
+  const d=fromYMD(currentDate); viewMonth={y:d.getFullYear(),m:d.getMonth()};
   renderCalendar();
 }
-dayPretty.textContent = new Date().toLocaleDateString(undefined,{weekday:"short", day:"2-digit", month:"short", year:"numeric"});
-ensureScratch();
+dayPretty.textContent=new Date().toLocaleDateString(undefined,{weekday:"short", day:"2-digit", month:"short", year:"numeric"});
 renderAll();
 </script>
 </body>
