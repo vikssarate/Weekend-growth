@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Weekend Coins — Daily Timers + Weekend-Only Calendar</title>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<style>
+:root{
+  --bg:#0f1220;--card:#181c2f;--ink:#eef1ff;--muted:#9aa3c7;--line:#2a3052;
+  --ok:#7bd88f;--warn:#ffd166;--bad:#ff7575;--accent:#6ca8ff
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial;
+  -webkit-tap-highlight-color:transparent
+}
+header,footer{padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header h1{margin:0;font-size:18px;font-weight:600}
+.wrap{max-width:1200px;margin:0 auto;padding:12px}
+.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
+.panel{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 0 0 1px var(--line)}
+.panel h2{margin:.2rem 0 8px;font-size:16px}
+.sub{color:var(--muted);font-size:12px}
+.row{display:flex;align-items:center;gap:10px}
+.btn{
+  background:transparent;border:1px solid var(--line);color:var(--ink);
+  padding:6px 10px;border-radius:10px;cursor:pointer
+}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#06142a}
+.btn.danger{border-color:var(--bad);color:var(--bad)}
+.kv{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tag{border:1px solid var(--line);padding:4px 8px;border-radius:999px;font-size:12px}
+.tag.ok{border-color:var(--ok);color:var(--ok)}
+.tag.bad{border-color:var(--bad);color:var(--bad)}
+small.muted{color:var(--muted)}
+
+/* Tasks list */
+.task{display:grid;grid-template-columns:1fr 96px 90px 96px;gap:8px;align-items:center;border-bottom:1px dashed var(--line);padding:8px 0}
+.task .name{font-weight:600}
+.task .time{font-variant-numeric:tabular-nums;text-align:center}
+.task .start{justify-self:end}
+
+/* Config */
+details.cfg{margin-top:10px}
+details.cfg summary{cursor:pointer;color:var(--muted);margin:6px 0 10px}
+.cfglist{display:grid;gap:8px}
+.cfgrow{display:grid;grid-template-columns:1fr 90px 110px 34px;gap:8px;align-items:center}
+input[type="text"],input[type="number"],textarea,select{
+  width:100%;background:#0d1122;border:1px solid var(--line);color:var(--ink);
+  padding:8px;border-radius:10px
+}
+textarea{min-height:70px;resize:vertical}
+
+/* Weekend calendar */
+.calHeader{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.calHeader .nav .btn{padding:4px 8px}
+.legend{display:flex;gap:8px;align-items:center}
+.legend .dot{font-size:16px}
+.weekendGrid{
+  display:grid;grid-template-columns:1fr 1fr;gap:10px;border-top:1px solid var(--line);padding-top:8px
+}
+.colHead{color:var(--muted);font-size:12px;text-align:center;margin-bottom:6px}
+.day{
+  min-height:74px;border:1px solid var(--line);border-radius:10px;padding:6px;
+  display:flex;flex-direction:column;justify-content:space-between;cursor:pointer
+}
+.day:hover{border-color:var(--accent)}
+.day .dtop{display:flex;align-items:center;justify-content:space-between}
+.day .num{font-weight:700}
+.day .coin{font-size:18px}
+.day.inactive{opacity:.35;pointer-events:none}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.stat{border:1px dashed var(--line);padding:8px;border-radius:10px}
+.center{display:flex;align-items:center;justify-content:center}
+
+@media (max-width:980px){ .grid{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<header>
+  <h1>Weekend Coins</h1>
+  <div class="row" style="margin-left:auto">
+    <button id="exportBtn" class="btn">Export JSON</button>
+    <label class="btn" for="importJson">Import JSON</label>
+    <input id="importJson" type="file" accept="application/json" hidden>
+    <label class="row" style="gap:6px;align-items:center">
+      <input id="soundToggle" type="checkbox" checked>
+      <small class="muted">Sound</small>
+    </label>
+    <button id="testBeep" class="btn">Test</button>
+  </div>
+</header>
+
+<div class="wrap grid">
+
+  <!-- LEFT: Day panel -->
+  <section class="panel" id="dayPanel">
+    <div class="row" style="justify-content:space-between;margin-bottom:6px">
+      <h2 id="dayTitle">Tasks for <span id="dayPretty"></span></h2>
+      <div class="row">
+        <button class="btn" id="prevDay">◀</button>
+        <button class="btn" id="todayBtn">Today</button>
+        <button class="btn" id="nextDay">▶</button>
+      </div>
+    </div>
+    <small class="muted">Set each task’s Target in ⚙️ Configure. Starting a task auto-stops the previous one.</small>
+
+    <div id="tasks"></div>
+
+    <div class="row" style="gap:8px;margin:10px 0 6px">
+      <button class="btn" id="stopAll">Stop All</button>
+      <button class="btn" id="clearDay">Clear</button>
+    </div>
+
+    <div class="kv" style="margin:8px 0 2px">
+      <span class="tag">Efficiency: <b id="eff">0%</b></span>
+      <span class="tag">Coin: <span id="coin">–</span></span>
+    </div>
+
+    <div class="row" style="gap:8px;margin:8px 0 0">
+      <button class="btn primary" id="saveDay">Save Day</button>
+      <button class="btn danger" id="deleteDay">Delete</button>
+    </div>
+
+    <div style="margin-top:10px">
+      <label for="note"><small class="muted">Notes</small></label>
+      <textarea id="note" placeholder="Optional note for the day…"></textarea>
+    </div>
+
+    <details class="cfg">
+      <summary>⚙️ Configure (tasks, weights, targets, thresholds)</summary>
+
+      <div class="cfglist" id="cfgList"></div>
+
+      <div class="row" style="gap:8px;margin:10px 0">
+        <input id="newName" type="text" placeholder="Task name">
+        <input id="newWeight" type="number" min="1" step="1" placeholder="Weight">
+        <input id="newTarget" type="number" min="1" step="1" placeholder="Target (min)">
+        <button id="addTask" class="btn">Add Task</button>
+      </div>
+
+      <div class="row" style="gap:8px;flex-wrap:wrap">
+        <label>🥉 <input id="thBronze" type="number" min="1" max="99" value="40"> %</label>
+        <label>🥈 <input id="thSilver" type="number" min="1" max="99" value="70"> %</label>
+        <label>🥇 <input id="thGold"   type="number" min="1" max="100" value="90"> %</label>
+        <button id="saveCfg" class="btn primary">Save Config</button>
+      </div>
+    </details>
+  </section>
+
+  <!-- RIGHT: Weekend calendar -->
+  <section class="panel" id="calPanel">
+    <div class="calHeader">
+      <div class="row nav">
+        <button class="btn" id="prevMonth">◀</button>
+        <h2 id="monthTitle" style="margin:0 6px"></h2>
+        <button class="btn" id="nextMonth">▶</button>
+      </div>
+      <div class="legend">
+        <span class="dot">🥉</span><small class="muted" id="cBronze">0</small>
+        <span class="dot">🥈</span><small class="muted" id="cSilver">0</small>
+        <span class="dot">🥇</span><small class="muted" id="cGold">0</small>
+      </div>
+    </div>
+
+    <div class="row" style="gap:10px;margin:4px 0 8px">
+      <div class="tag">Weekend-only view</div>
+      <small class="muted">Tap a date to load it on the left.</small>
+    </div>
+
+    <div class="row" style="gap:10px">
+      <div class="colHead" style="flex:1">Saturday</div>
+      <div class="colHead" style="flex:1">Sunday</div>
+    </div>
+
+    <div id="weekendGrid" class="weekendGrid"></div>
+
+    <div class="stats">
+      <div class="stat"><b>Monthly Average Points</b><div id="avgPts" class="center" style="font-size:22px;margin-top:4px">0</div></div>
+      <div class="stat"><b>Longest Streak (≥🥈)</b><div id="streak" class="center" style="font-size:22px;margin-top:4px">0</div></div>
+      <div class="stat"><b>Overall Month</b><div id="domMonth" class="center" style="margin-top:4px">–</div></div>
+      <div class="stat"><b>Overall Year</b><div id="domYear" class="center" style="margin-top:4px">–</div></div>
+    </div>
+  </section>
+
+</div>
+
+<footer class="wrap" style="justify-content:space-between">
+  <small class="muted">Weekend-only calendar • data is saved in your browser (localStorage)</small>
+  <small class="muted">Made for iPad Safari: tap targets, tabular timers, offline-friendly</small>
+</footer>
+
+<script>
+/* ------------------------- Storage & Defaults ------------------------- */
+const LSK = "weekend_coins_store_v1";
+
+const defaultState = () => ({
+  sound:true,
+  thresholds:{ bronze:40, silver:70, gold:90 },
+  tasks:[
+    {id:rid(), name:"Memorisation", weight:3, target:180},
+    {id:rid(), name:"Math Practice", weight:2, target:60},
+    {id:rid(), name:"Throughout-day Reinforcing", weight:1, target:20},
+    {id:rid(), name:"Night Recall", weight:1, target:20},
+    {id:rid(), name:"Sleep", weight:1, target:240},
+    {id:rid(), name:"Study (misc)", weight:1, target:1},
+  ],
+  days:{} // "YYYY-MM-DD": { note, elapsed:{taskId:seconds}, eff:0..100, coin:'none'|'bronze'|'silver'|'gold' }
+});
+
+let S = load();
+
+function load(){
+  try{
+    const raw = localStorage.getItem(LSK);
+    if(!raw) return defaultState();
+    const obj = JSON.parse(raw);
+    // basic migrations
+    if(!obj.thresholds) obj.thresholds = { bronze:40, silver:70, gold:90 };
+    if(!obj.tasks) obj.tasks = defaultState().tasks;
+    if(!obj.days) obj.days = {};
+    if(typeof obj.sound!=="boolean") obj.sound = true;
+    return obj;
+  }catch(e){ return defaultState(); }
+}
+function save(){ localStorage.setItem(LSK, JSON.stringify(S)); }
+
+/* ------------------------- Helpers ------------------------- */
+function rid(){ return Math.random().toString(36).slice(2,9) }
+function f2(n){ return String(n).padStart(2,"0") }
+function ymd(d){ return d.toISOString().slice(0,10) }
+function fromYMD(s){
+  const [y,m,dd] = s.split("-").map(Number);
+  return new Date(y, m-1, dd);
+}
+function minutes(secs){ return Math.floor(secs/60) }
+function fmtSecs(secs){
+  const h = Math.floor(secs/3600);
+  const m = Math.floor((secs%3600)/60);
+  const s = Math.floor(secs%60);
+  return (h? (h+":"+f2(m)): (m))+":"+f2(s);
+}
+function beep(){
+  if(!S.sound) return;
+  try{
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain(); g.gain.value = .06;
+    o.connect(g).connect(ctx.destination);
+    o.frequency.value = 880; o.start();
+    setTimeout(()=>{o.stop();ctx.close()},140);
+  }catch(e){}
+}
+function coinFromEff(p){
+  const t=S.thresholds;
+  if(p>=t.gold) return "gold";
+  if(p>=t.silver) return "silver";
+  if(p>=t.bronze) return "bronze";
+  return "none";
+}
+const COIN_EMO = { none:"–", bronze:"🥉", silver:"🥈", gold:"🥇" };
+const COIN_PTS = { none:0, bronze:1, silver:2, gold:3 };
+
+/* ------------------------- Day Runtime ------------------------- */
+let currentDate = ymd(new Date());
+let runtime = { timers:{}, ticker:null, active:null, scratchElapsed:{} };
+// scratchElapsed holds unsaved elapsed seconds for visible day
+
+function ensureScratch(){
+  runtime.scratchElapsed = {};
+  S.tasks.forEach(t=>{
+    runtime.scratchElapsed[t.id]=0;
+  });
+  const saved = S.days[currentDate];
+  if(saved && saved.elapsed){
+    for(const k of Object.keys(saved.elapsed)){
+      runtime.scratchElapsed[k]=saved.elapsed[k]||0;
+    }
+    if(saved.note) note.value = saved.note;
+  }else{
+    note.value="";
+  }
+}
+
+function startTimer(taskId){
+  stopAllTimers();
+  runtime.active = taskId;
+  runtime.timers[taskId] = { start: Date.now() };
+  if(!runtime.ticker){
+    runtime.ticker = setInterval(tick, 1000);
+  }
+  beep();
+  renderTasks();
+}
+function stopTimer(taskId){
+  const t = runtime.timers[taskId];
+  if(!t) return;
+  const delta = Math.floor((Date.now()-t.start)/1000);
+  runtime.scratchElapsed[taskId] = (runtime.scratchElapsed[taskId]||0)+delta;
+  delete runtime.timers[taskId];
+  if(Object.keys(runtime.timers).length===0){ clearInterval(runtime.ticker); runtime.ticker=null; runtime.active=null; }
+  beep();
+  renderTasks();
+}
+function stopAllTimers(){
+  for(const id of Object.keys(runtime.timers)) stopTimer(id);
+}
+function tick(){ renderTasks() }
+
+function computeEfficiency(){
+  const totalW = S.tasks.reduce((a,t)=>a+(t.weight||1),0) || 1;
+  let score=0;
+  S.tasks.forEach(t=>{
+    const el = (runtime.scratchElapsed[t.id]||0);
+    const frac = Math.min(el/ (Math.max(t.target,1)*60), 1);
+    score += (t.weight||1)*frac;
+  });
+  const pct = Math.round((score/totalW)*10000)/100; // 0.00
+  return Math.max(0, Math.min(100, pct));
+}
+
+/* ------------------------- DOM references ------------------------- */
+const tasksEl = document.getElementById("tasks");
+const effEl = document.getElementById("eff");
+const coinEl = document.getElementById("coin");
+const note = document.getElementById("note");
+const dayPretty = document.getElementById("dayPretty");
+
+/* Buttons */
+document.getElementById("stopAll").onclick = ()=>stopAllTimers();
+document.getElementById("clearDay").onclick = ()=>{
+  stopAllTimers();
+  ensureScratch(); renderTasks(); updateDayKpis();
+};
+document.getElementById("saveDay").onclick = saveCurrentDay;
+document.getElementById("deleteDay").onclick = ()=>{
+  stopAllTimers();
+  delete S.days[currentDate]; save(); renderCalendar(); ensureScratch(); renderTasks(); updateDayKpis();
+};
+document.getElementById("todayBtn").onclick = ()=>selectDate(ymd(new Date()));
+document.getElementById("prevDay").onclick = ()=>shiftDay(-1);
+document.getElementById("nextDay").onclick = ()=>shiftDay(1);
+
+/* Sound & test */
+document.getElementById("soundToggle").checked = !!S.sound;
+document.getElementById("soundToggle").onchange = (e)=>{ S.sound=!!e.target.checked; save(); };
+document.getElementById("testBeep").onclick = ()=>beep();
+
+/* Export/Import */
+document.getElementById("exportBtn").onclick = ()=>{
+  const blob = new Blob([JSON.stringify(S,null,2)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "weekend-coins-backup.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+document.getElementById("importJson").onchange = (e)=>{
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = ()=>{
+    try{
+      const obj = JSON.parse(r.result);
+      S = Object.assign(defaultState(), obj);
+      save();
+      ensureScratch(); renderAll();
+    }catch(err){ alert("Invalid JSON"); }
+  };
+  r.readAsText(f);
+};
+
+/* Config controls */
+const cfgList = document.getElementById("cfgList");
+document.getElementById("addTask").onclick = ()=>{
+  const name = document.getElementById("newName").value.trim();
+  const weight = +document.getElementById("newWeight").value||1;
+  const target = +document.getElementById("newTarget").value||30;
+  if(!name) return;
+  S.tasks.push({id:rid(), name, weight, target});
+  document.getElementById("newName").value="";
+  document.getElementById("newWeight").value="";
+  document.getElementById("newTarget").value="";
+  save(); renderConfig(); ensureScratch(); renderTasks(); updateDayKpis();
+};
+document.getElementById("saveCfg").onclick = ()=>{
+  S.thresholds.bronze = +document.getElementById("thBronze").value||40;
+  S.thresholds.silver = +document.getElementById("thSilver").value||70;
+  S.thresholds.gold   = +document.getElementById("thGold").value||90;
+  save(); renderCalendar(); updateDayKpis();
+};
+
+/* Calendar nav */
+let viewMonth = (()=>{ const d=new Date(); return {y:d.getFullYear(), m:d.getMonth()}; })();
+document.getElementById("prevMonth").onclick = ()=>shiftMonth(-1);
+document.getElementById("nextMonth").onclick = ()=>shiftMonth(1);
+
+/* ------------------------- Renderers ------------------------- */
+function renderTasks(){
+  tasksEl.innerHTML = "";
+  S.tasks.forEach(t=>{
+    const running = !!runtime.timers[t.id];
+    const elapsed = (runtime.scratchElapsed[t.id]||0) + (running ? Math.floor((Date.now()-runtime.timers[t.id].start)/1000) : 0);
+    const row = document.createElement("div"); row.className="task";
+
+    const nm = document.createElement("div"); nm.className="name"; nm.innerHTML = `${t.name} <small class="muted">(${((t.weight||1))}w • target ${t.target}m)</small>`;
+    const elc = document.createElement("div"); elc.className="time"; elc.textContent = fmtSecs(elapsed);
+    const prog = document.createElement("div"); prog.className="time";
+    const pct = Math.min(100, Math.round(elapsed/(t.target*60)*100));
+    prog.innerHTML = `<small class="muted">${pct}%</small>`;
+    const act = document.createElement("div"); act.className="start";
+    const b = document.createElement("button");
+    b.className="btn";
+    b.textContent = running ? "Stop" : "Start";
+    b.onclick = ()=> running ? stopTimer(t.id) : startTimer(t.id);
+    act.appendChild(b);
+
+    row.append(nm, elc, prog, act);
+    tasksEl.appendChild(row);
+  });
+  updateDayKpis();
+}
+
+function updateDayKpis(){
+  const p = computeEfficiency();
+  effEl.textContent = p.toFixed(2)+"%";
+  const c = coinFromEff(p);
+  coinEl.textContent = COIN_EMO[c];
+}
+
+function renderConfig(){
+  cfgList.innerHTML="";
+  S.tasks.forEach((t,idx)=>{
+    const row = document.createElement("div"); row.className="cfgrow";
+    const n = document.createElement("input"); n.type="text"; n.value=t.name; n.onchange=()=>{ t.name=n.value; save(); renderTasks(); renderCalendar(); };
+    const w = document.createElement("input"); w.type="number"; w.min=1; w.step=1; w.value=t.weight||1; w.onchange=()=>{ t.weight=+w.value||1; save(); renderTasks(); renderCalendar(); };
+    const tg = document.createElement("input"); tg.type="number"; tg.min=1; tg.step=1; tg.value=t.target||30; tg.onchange=()=>{ t.target=+tg.value||30; save(); renderTasks(); };
+    const del = document.createElement("button"); del.className="btn danger"; del.textContent="✕";
+    del.onclick=()=>{ if(!confirm("Delete task?")) return; S.tasks.splice(idx,1); save(); renderConfig(); ensureScratch(); renderTasks(); renderCalendar(); };
+    row.append(n,w,tg,del);
+    cfgList.appendChild(row);
+  });
+  document.getElementById("thBronze").value = S.thresholds.bronze;
+  document.getElementById("thSilver").value = S.thresholds.silver;
+  document.getElementById("thGold").value   = S.thresholds.gold;
+}
+
+function renderCalendar(){
+  const title = new Date(viewMonth.y, viewMonth.m, 1).toLocaleString(undefined,{month:"long", year:"numeric"});
+  document.getElementById("monthTitle").textContent = title;
+
+  const grid = document.getElementById("weekendGrid");
+  grid.innerHTML = "";
+
+  const weekends = weekendPairs(viewMonth.y, viewMonth.m); // array of {sat:Date|null, sun:Date|null}
+  let cnt = {bronze:0,silver:0,gold:0};
+  weekends.forEach(pair=>{
+    const cells = [pair.sat, pair.sun];
+    cells.forEach(d=>{
+      const cell = document.createElement("div"); cell.className="day";
+      if(!d){ cell.classList.add("inactive"); cell.innerHTML="<div class='center' style='height:100%'><small class='muted'>–</small></div>"; grid.appendChild(cell); return; }
+      const dateStr = ymd(d);
+      const rec = S.days[dateStr];
+      const coin = rec ? (rec.coin||"none") : "none";
+      if(coin!=="none") cnt[coin]++;
+
+      const top = document.createElement("div"); top.className="dtop";
+      const num = document.createElement("div"); num.className="num"; num.textContent = d.getDate();
+      const c = document.createElement("div"); c.className="coin"; c.textContent = COIN_EMO[coin];
+      top.append(num,c);
+
+      const note = document.createElement("small"); note.className="muted";
+      note.textContent = rec && rec.note ? (rec.note.slice(0,40)) : "";
+
+      cell.append(top, note);
+      cell.onclick = ()=> selectDate(dateStr);
+      grid.appendChild(cell);
+    });
+  });
+
+  // Counters
+  document.getElementById("cBronze").textContent = cnt.bronze;
+  document.getElementById("cSilver").textContent = cnt.silver;
+  document.getElementById("cGold").textContent   = cnt.gold;
+
+  // Stats
+  updateMonthStats(viewMonth.y, viewMonth.m);
+}
+
+function weekendPairs(year, monthIdx){
+  // Build rows with (Saturday, Sunday) for this month (may be null if outside month)
+  const first = new Date(year, monthIdx, 1);
+  const lastDay = new Date(year, monthIdx+1, 0).getDate();
+  const days = [];
+  for(let d=1; d<=lastDay; d++){
+    const dt = new Date(year, monthIdx, d);
+    if(dt.getDay()===6){ // Saturday
+      const sun = (d+1<=lastDay) ? new Date(year, monthIdx, d+1) : null;
+      days.push({sat:dt, sun});
+    }
+  }
+  // Ensure at least 5 rows for consistent grid height
+  while(days.length<5) days.push({sat:null, sun:null});
+  return days;
+}
+
+function updateMonthStats(y,m){
+  const last = new Date(y, m+1, 0).getDate();
+  const pts=[], stamps=[];
+  for(let d=1; d<=last; d++){
+    const dt = new Date(y, m, d);
+    if(dt.getDay()!==6 && dt.getDay()!==0) continue; // weekends only
+    const rec = S.days[ymd(dt)];
+    if(!rec) continue;
+    pts.push(COIN_PTS[rec.coin||"none"]);
+    stamps.push({d:dt, coin:rec.coin||"none"});
+  }
+  const avg = pts.length? (pts.reduce((a,b)=>a+b,0)/pts.length).toFixed(2):"0";
+  document.getElementById("avgPts").textContent = avg;
+
+  // Longest streak (silver or gold) across consecutive weekend days
+  stamps.sort((a,b)=>a.d-b.d);
+  let best=0, cur=0;
+  stamps.forEach((s,i)=>{
+    const ok = (s.coin==="silver"||s.coin==="gold");
+    if(!ok){ cur=0; return; }
+    if(i===0){ cur=1; best=Math.max(best,cur); return; }
+    const prev = stamps[i-1].d;
+    const diff = (s.d - prev)/(1000*60*60*24);
+    // treat Sat->Sun (1 day) or previous weekend to next Saturday (6 or 7 days depending on saved days) as consecutive weekend steps
+    if(diff===1 || diff>=6){ cur+=1; } else { cur=1; }
+    best=Math.max(best,cur);
+  });
+  document.getElementById("streak").textContent = best;
+
+  // Dominant coin for this month
+  const counts = {bronze:0,silver:0,gold:0};
+  stamps.forEach(s=>{ if(s.coin!=="none") counts[s.coin]++; });
+  const dom = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+  document.getElementById("domMonth").textContent = dom && dom[1]>0 ? `${COIN_EMO[dom[0]]} by count` : "–";
+
+  // Dominant monthly coin for the year (aggregate per month)
+  const agg = {bronze:0,silver:0,gold:0};
+  for(let mm=0; mm<12; mm++){
+    const cnt = {bronze:0,silver:0,gold:0};
+    const last2 = new Date(y, mm+1, 0).getDate();
+    for(let d=1; d<=last2; d++){
+      const dt = new Date(y, mm, d);
+      if(dt.getDay()!==6 && dt.getDay()!==0) continue;
+      const rec = S.days[ymd(dt)];
+      if(rec && rec.coin!=="none") cnt[rec.coin]++;
+    }
+    const domM = Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0];
+    if(domM && domM[1]>0) agg[domM[0]]++;
+  }
+  const domY = Object.entries(agg).sort((a,b)=>b[1]-a[1])[0];
+  document.getElementById("domYear").textContent = domY && domY[1]>0 ? `${COIN_EMO[domY[0]]} by month` : "–";
+}
+
+/* ------------------------- Day selection & persistence ------------------------- */
+function selectDate(dStr){
+  stopAllTimers();
+  currentDate = dStr;
+  dayPretty.textContent = fromYMD(currentDate).toLocaleDateString(undefined,{weekday:"short", day:"2-digit", month:"short", year:"numeric"});
+  ensureScratch(); renderTasks(); updateDayKpis();
+}
+function shiftDay(delta){
+  const d = fromYMD(currentDate); d.setDate(d.getDate()+delta);
+  selectDate(ymd(d));
+}
+function saveCurrentDay(){
+  stopAllTimers();
+  const eff = computeEfficiency();
+  const coin = coinFromEff(eff);
+  S.days[currentDate] = {
+    note: note.value||"",
+    elapsed: {...runtime.scratchElapsed},
+    eff, coin
+  };
+  save();
+  renderCalendar(); updateDayKpis();
+  beep();
+}
+
+/* ------------------------- Month navigation ------------------------- */
+function shiftMonth(delta){
+  viewMonth.m += delta;
+  if(viewMonth.m<0){ viewMonth.m=11; viewMonth.y--; }
+  if(viewMonth.m>11){ viewMonth.m=0; viewMonth.y++; }
+  renderCalendar();
+}
+
+/* ------------------------- Bootstrap ------------------------- */
+function renderAll(){
+  renderConfig();
+  document.getElementById("soundToggle").checked = !!S.sound;
+  selectDate(currentDate);
+  // Set month view to current date's month
+  const d = fromYMD(currentDate);
+  viewMonth = { y:d.getFullYear(), m:d.getMonth() };
+  renderCalendar();
+}
+dayPretty.textContent = new Date().toLocaleDateString(undefined,{weekday:"short", day:"2-digit", month:"short", year:"numeric"});
+ensureScratch();
+renderAll();
+</script>
+</body>
+</html>
