@@ -32,20 +32,26 @@ header h1{margin:0;font-size:18px;font-weight:600}
 .tag.bad{border-color:var(--bad);color:var(--bad)}
 small.muted{color:var(--muted)}
 
-/* Tasks list (added minutes chip + alarm button area) */
+/* Tasks list: name | hh:mm:ss | mins chip | % | buttons | mins input | % input */
 .task{
   display:grid;
-  grid-template-columns:1fr 96px 110px 74px 160px; /* name | hh:mm:ss | mins chip | % | buttons */
+  grid-template-columns:1fr 96px 110px 74px 160px 110px 96px;
   gap:8px;align-items:center;border-bottom:1px dashed var(--line);padding:8px 0
 }
 .task .name{font-weight:600}
 .task .time{font-variant-numeric:tabular-nums;text-align:center}
 .task .start{justify-self:end;display:flex;gap:8px}
+input[type="text"],input[type="number"],textarea,select{
+  width:100%;background:#0d1122;border:1px solid var(--line);color:var(--ink);
+  padding:8px;border-radius:10px
+}
+
+/* Minutes chip + % display */
 .chip{
   font-variant-numeric:tabular-nums;text-align:center;border:1px solid var(--line);
   border-radius:10px;padding:6px 8px;min-width:100px;background:#0d1122
 }
-.pct{min-width:64px}
+.pct{min-width:64px;text-align:center}
 
 /* Ringing visuals */
 .ringing{animation:pulse 1s infinite}
@@ -60,10 +66,6 @@ details.cfg{margin-top:10px}
 details.cfg summary{cursor:pointer;color:var(--muted);margin:6px 0 10px}
 .cfglist{display:grid;gap:8px}
 .cfgrow{display:grid;grid-template-columns:1fr 90px 110px 34px;gap:8px;align-items:center}
-input[type="text"],input[type="number"],textarea,select{
-  width:100%;background:#0d1122;border:1px solid var(--line);color:var(--ink);
-  padding:8px;border-radius:10px
-}
 textarea{min-height:70px;resize:vertical}
 
 /* Weekend calendar */
@@ -88,6 +90,9 @@ textarea{min-height:70px;resize:vertical}
 .stat{border:1px dashed var(--line);padding:8px;border-radius:10px}
 .center{display:flex;align-items:center;justify-content:center}
 
+@media (max-width:1180px){
+  .task{grid-template-columns:1fr 96px 100px 64px 150px 100px 90px}
+}
 @media (max-width:980px){ .grid{grid-template-columns:1fr} }
 </style>
 </head>
@@ -118,7 +123,7 @@ textarea{min-height:70px;resize:vertical}
         <button class="btn" id="nextDay">▶</button>
       </div>
     </div>
-    <small class="muted">Start/Stop a task. When a task reaches its target minutes, it <b>rings</b> until you press <b>🔔 Stop</b> or <b>Stop Alarm</b>.</small>
+    <small class="muted">Start/Stop a task. Minute & % inputs also adjust progress. When a task reaches its target minutes, it <b>rings</b> until you press <b>🔔 Stop</b> or <b>Stop Alarm</b>.</small>
 
     <div id="tasks"></div>
 
@@ -208,8 +213,8 @@ textarea{min-height:70px;resize:vertical}
 
 <script>
 /* ========= Keys & Defaults ========= */
-const LSK = "weekend_coins_store_v2";         // config + days
-const TSK = "weekend_coins_timers_v2";        // per-day timers for alarms
+const LSK = "weekend_coins_store_v2";         // config + days (kept same)
+const TSK = "weekend_coins_timers_v1";        // timers store (kept same)
 const ALARM_REPEAT_MS = 5000;
 
 const defaultState = () => ({
@@ -259,9 +264,12 @@ function fmtSecs(secs){ const h=Math.floor(secs/3600), m=Math.floor((secs%3600)/
 const COIN_EMO = { none:"·", bronze:"🥉", silver:"🥈", gold:"🥇" };
 const COIN_PTS = { none:0, bronze:1, silver:2, gold:3 };
 function coinFromEff(p){ const t=S.thresholds; if(p>=t.gold) return "gold"; if(p>=t.silver) return "silver"; if(p>=t.bronze) return "bronze"; return "none"; }
+function clamp(n,min,max){ return Math.max(min, Math.min(max, n)); }
 function save(){ localStorage.setItem(LSK, JSON.stringify(S)); }
 function load(){
-  try{ const raw=localStorage.getItem(LSK); if(!raw) return defaultState(); const obj=JSON.parse(raw); obj.thresholds??={bronze:40,silver:70,gold:90}; obj.tasks??=defaultState().tasks; obj.days??={}; obj.sound=!!obj.sound; return obj; }catch(e){ return defaultState(); }
+  try{ const raw=localStorage.getItem(LSK); if(!raw) return defaultState(); const obj=JSON.parse(raw);
+      obj.thresholds??={bronze:40,silver:70,gold:90}; obj.tasks??=defaultState().tasks; obj.days??={}; obj.sound=!!obj.sound; return obj;
+  }catch(e){ return defaultState(); }
 }
 function loadTimers(){ try{ const r=localStorage.getItem(TSK); return r? JSON.parse(r) : {days:{}}; }catch(e){ return {days:{}}; } }
 function saveTimers(){ localStorage.setItem(TSK, JSON.stringify(T)); }
@@ -415,11 +423,47 @@ document.getElementById("importJson").onchange = (e)=>{
   r.readAsText(f);
 };
 
+/* ========= Manual input sync ========= */
+function onManualInput(el){
+  const id = el.dataset.task;
+  const kind = el.dataset.kind; // "mins" or "perc"
+  const timers = getDayTimers(currentDate);
+  const st = timers[id];
+  const task = S.tasks.find(t=>t.id===id);
+  if(!task) return;
+  const target = Math.max(0, +task.target||0);
+
+  if(kind === "mins"){
+    const mins = Math.max(0, Math.round((+el.value||0)));
+    st.sec = mins * 60;
+    // reflect to % input
+    const perc = target ? clamp(Math.round((mins/target)*100), 0, 100) : 0;
+    const pInp = document.getElementById(`perinp-${id}`); if(pInp) pInp.value = perc;
+  }else if(kind === "perc"){
+    const perc = clamp(Math.round((+el.value||0)), 0, 100);
+    const mins = target ? Math.round((perc/100)*target) : 0;
+    st.sec = mins * 60;
+    const mInp = document.getElementById(`mininp-${id}`); if(mInp) mInp.value = mins;
+  }
+
+  // If user lowered below target, clear ringing flag & stop alarm loop
+  const targetSec = target * 60;
+  if(st.sec < targetSec){
+    if(st.ringing) stopAlarm(currentDate, id, false);
+    if(st.fired){ st.fired = false; }
+  }
+
+  saveTimers();
+  updateTimerUI();
+  checkAlarms(currentDate);
+  updateDayKpis();
+}
+
 /* ========= Renderers ========= */
 function renderTasks(){
   tasksEl.innerHTML="";
   const timers=getDayTimers(currentDate);
-  if(S.days[currentDate]?.note) note.value=S.days[currentDate].note; else note.value="";
+  note.value = S.days[currentDate]?.note || "";
 
   S.tasks.forEach(t=>{
     const st=timers[t.id];
@@ -439,7 +483,7 @@ function renderTasks(){
     const minChip=document.createElement("div"); minChip.className="chip"; minChip.id=`mins-${t.id}`;
     minChip.textContent = t.target ? `${minsDone} / ${t.target} m` : `${minsDone} m`;
 
-    const prog=document.createElement("div"); prog.className="time pct"; prog.id=`pct-${t.id}`;
+    const prog=document.createElement("div"); prog.className="pct"; prog.id=`pct-${t.id}`;
     prog.innerHTML = `<small class="muted">${pct}%</small>`;
 
     const act=document.createElement("div"); act.className="start";
@@ -462,7 +506,16 @@ function renderTasks(){
 
     act.append(startBtn, alarmBtn);
 
-    row.append(nm, elc, minChip, prog, act);
+    // Manual inputs
+    const minInp=document.createElement("input"); minInp.type="number"; minInp.min="0"; minInp.step="1";
+    minInp.id=`mininp-${t.id}`; minInp.dataset.task=t.id; minInp.dataset.kind="mins"; minInp.value=minsDone;
+    minInp.addEventListener("input", (e)=> onManualInput(e.target));
+
+    const perInp=document.createElement("input"); perInp.type="number"; perInp.min="0"; perInp.max="100"; perInp.step="1";
+    perInp.id=`perinp-${t.id}`; perInp.dataset.task=t.id; perInp.dataset.kind="perc"; perInp.value=pct;
+    perInp.addEventListener("input", (e)=> onManualInput(e.target));
+
+    row.append(nm, elc, minChip, prog, act, minInp, perInp);
     tasksEl.appendChild(row);
   });
 }
@@ -476,7 +529,9 @@ function updateTimerUI(){
     const pctEl=document.getElementById(`pct-${t.id}`);
     const btn=document.getElementById(`btn-${t.id}`);
     const alarmBtn=document.getElementById(`alarm-${t.id}`);
-    if(!el||!btn||!chip||!pctEl) continue;
+    const minInp=document.getElementById(`mininp-${t.id}`);
+    const perInp=document.getElementById(`perinp-${t.id}`);
+    if(!el||!btn||!chip||!pctEl||!minInp||!perInp) continue;
 
     const st=timers[t.id]||{sec:0,running:false,start:null,ringing:false};
     const sec = st.running ? st.sec + Math.floor((Date.now()-st.start)/1000) : st.sec;
@@ -486,6 +541,8 @@ function updateTimerUI(){
     el.textContent = fmtSecs(sec);
     chip.textContent = t.target ? `${mins} / ${t.target} m` : `${mins} m`;
     pctEl.innerHTML = `<small class="muted">${pct}%</small>`;
+    if(document.activeElement !== minInp) minInp.value = mins;
+    if(document.activeElement !== perInp) perInp.value = pct;
 
     if(st.ringing){
       btn.textContent="🔔 Stop"; btn.classList.add("warn");
