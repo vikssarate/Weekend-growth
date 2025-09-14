@@ -32,7 +32,7 @@ header h1{margin:0;font-size:18px;font-weight:600}
 .tag.bad{border-color:var(--bad);color:var(--bad)}
 small.muted{color:var(--muted)}
 
-/* Tasks list: name | hh:mm:ss | mins chip | % | buttons | mins input | % input */
+/* Tasks: name | hh:mm:ss | mins chip | % | buttons | mins input | % input */
 .task{
   display:grid;
   grid-template-columns:1fr 96px 110px 74px 160px 110px 96px;
@@ -123,7 +123,7 @@ textarea{min-height:70px;resize:vertical}
         <button class="btn" id="nextDay">▶</button>
       </div>
     </div>
-    <small class="muted">Start/Stop a task. Minute & % inputs also adjust progress. When a task reaches its target minutes, it <b>rings</b> until you press <b>🔔 Stop</b> or <b>Stop Alarm</b>.</small>
+    <small class="muted">Start/Stop a task. Minute & % inputs also adjust progress. When a task reaches its target minutes, it <b>rings</b> until you press <b>🔔 Stop</b> or <b>Stop Alarm</b>. A coin is added to the calendar only when <b>all tasks reach target</b> and you press <b>Save Day</b>.</small>
 
     <div id="tasks"></div>
 
@@ -213,8 +213,8 @@ textarea{min-height:70px;resize:vertical}
 
 <script>
 /* ========= Keys & Defaults ========= */
-const LSK = "weekend_coins_store_v2";         // config + days (kept same)
-const TSK = "weekend_coins_timers_v1";        // timers store (kept same)
+const LSK = "weekend_coins_store_v2";         // config + days
+const TSK = "weekend_coins_timers_v2";        // timers / alarms
 const ALARM_REPEAT_MS = 5000;
 
 const defaultState = () => ({
@@ -369,7 +369,7 @@ function checkAlarms(dayKey){
   }
 }
 
-/* ========= Efficiency from timers ========= */
+/* ========= Efficiency & completion ========= */
 function computeEfficiencyFromTimers(dayKey){
   const timers=getDayTimers(dayKey);
   const totalW = S.tasks.reduce((a,t)=>a+(t.weight||1),0)||1;
@@ -382,6 +382,29 @@ function computeEfficiencyFromTimers(dayKey){
   });
   const pct = Math.round((score/totalW)*10000)/100;
   return Math.max(0,Math.min(100,pct));
+}
+function allTargetsMet(dayKey){
+  const timers=getDayTimers(dayKey);
+  for(const t of S.tasks){
+    const targetSec=(+t.target||0)*60;
+    if(targetSec<=0) continue; // ignore zero-target tasks
+    const st=timers[t.id];
+    const elapsed = st.running ? st.sec + Math.floor((Date.now()-st.start)/1000) : st.sec;
+    if(elapsed < targetSec) return false;
+  }
+  return true;
+}
+function unmetTaskNames(dayKey){
+  const timers=getDayTimers(dayKey);
+  const list=[];
+  for(const t of S.tasks){
+    const targetSec=(+t.target||0)*60;
+    if(targetSec<=0) continue;
+    const st=timers[t.id];
+    const elapsed = st.running ? st.sec + Math.floor((Date.now()-st.start)/1000) : st.sec;
+    if(elapsed < targetSec) list.push(t.name);
+  }
+  return list;
 }
 
 /* ========= DOM refs ========= */
@@ -436,7 +459,6 @@ function onManualInput(el){
   if(kind === "mins"){
     const mins = Math.max(0, Math.round((+el.value||0)));
     st.sec = mins * 60;
-    // reflect to % input
     const perc = target ? clamp(Math.round((mins/target)*100), 0, 100) : 0;
     const pInp = document.getElementById(`perinp-${id}`); if(pInp) pInp.value = perc;
   }else if(kind === "perc"){
@@ -446,11 +468,11 @@ function onManualInput(el){
     const mInp = document.getElementById(`mininp-${id}`); if(mInp) mInp.value = mins;
   }
 
-  // If user lowered below target, clear ringing flag & stop alarm loop
+  // If lowered below target, clear alarm
   const targetSec = target * 60;
   if(st.sec < targetSec){
     if(st.ringing) stopAlarm(currentDate, id, false);
-    if(st.fired){ st.fired = false; }
+    if(st.fired){ st.fired = false; saveTimers(); }
   }
 
   saveTimers();
@@ -566,14 +588,25 @@ function updateDayKpis(){
   coinEl.textContent=COIN_EMO[coinFromEff(p)];
 }
 
+/* ======== Save Day (only coins when ALL targets met) ======== */
 function saveCurrentDay(){
   stopAll(currentDate);
   const timers=getDayTimers(currentDate);
   const elapsed={}; for(const t of S.tasks){ elapsed[t.id]=timers[t.id].sec; }
-  const eff=computeEfficiencyFromTimers(currentDate);
-  const coin=coinFromEff(eff);
+
+  const eff = computeEfficiencyFromTimers(currentDate);
+  const met = allTargetsMet(currentDate);            // <— key check
+  const coin = met ? coinFromEff(eff) : "none";
+
   S.days[currentDate]={ note:note.value||"", elapsed, eff, coin };
-  save(); renderCalendar(); updateDayKpis(); chime();
+  save(); renderCalendar(); updateDayKpis();
+
+  if(met){
+    chime();
+  }else{
+    const names = unmetTaskNames(currentDate);
+    if(names.length) alert("Finish targets to earn a coin:\n• " + names.join("\n• "));
+  }
 }
 
 /* ========= Weekend calendar ========= */
